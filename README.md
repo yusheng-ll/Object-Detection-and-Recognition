@@ -24,12 +24,11 @@ cd src && python track.py --source ../test_video.mp4
 
 目标跟踪：DeepSORT，使用在 Market-1501 上预训练的 Re-ID 模型
 
-测试视频：将 test_video.mp4 放置在项目根目录下 视频链接：https://pan.baidu.com/s/1VOVy0kcXvwDX03QE56JmEw
-提取码：pd63
+测试视频：将 test_video.mp4 放置在项目根目录下 视频链接：https://github.com/yusheng-ll/Object-Detection-and-Recognition/releases/tag/v1
 
 模型与演示
 实验voc数据集训练的YOLO模型
  [下载训练权重 best.pt](https://github.com/yusheng-ll/Object-Detection-and-Recognition/releases/tag/v1.0)
- [测试视频](同上链接)
+ [测试结果视频](同上链接)
 
 通过voc2yolo.py将voc数据集自动转换为yolo格式。
