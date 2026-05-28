@@ -19,8 +19,10 @@ cd src && python train.py && cd ..
 cd src && python track.py --source ../test_video.mp4
 ```
 
-数据集信息
+数据集信息：
 目标检测：VOC 数据集（自动转换为 YOLO 格式）地址：https://aistudio.baidu.com/datasetdetail/134811
+
 目标跟踪：DeepSORT，使用在 Market-1501 上预训练的 Re-ID 模型
+
 测试视频：将 test_video.mp4 放置在项目根目录下 视频链接：https://pan.baidu.com/s/1VOVy0kcXvwDX03QE56JmEw
 提取码：pd63
