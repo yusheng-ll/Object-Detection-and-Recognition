@@ -31,3 +31,4 @@ cd src && python track.py --source ../test_video.mp4
 实验voc数据集训练的YOLO模型
  [下载训练权重 best.pt](https://github.com/yusheng-ll/Object-Detection-and-Recognition/releases/tag/v1.0)
  [测试视频](同上链接)
+通过voc2yolo.py将voc数据集自动转换为yolo格式。
