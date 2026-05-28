@@ -1,0 +1,17 @@
+# DeepSORT 行人跟踪优化配置
+tracker_type: deepsort
+
+# 运动预测
+max_age: 45              # ↑ 增加遮挡容忍度
+n_init: 3
+max_iou_distance: 0.75   # ↑ 容忍更大速度变化
+
+# 外观匹配
+max_cosine_distance: 0.18  # ↓ 更严格，减少ID跳变
+nn_budget: 100
+
+# 检测
+min_confidence: 0.45
+max_matches: 10
+
+freeze: false
