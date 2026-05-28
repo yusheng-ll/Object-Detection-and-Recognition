@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>视频人群检测</title>
+    <!-- 关键：引入稳定的 Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {margin:0;padding:0;box-sizing:border-box;}
+        :root{--bg:#090e1b;--card:#121a2f;--neon:#00e5ff;--blue:#0099ff;--orange:#ffaa00;--red:#ff3366;--green:#00ff88;--text:#fff;--gray:#a0b1c5;}
+        body{font-family:"Microsoft YaHei";background:var(--bg);color:var(--text);padding:0 20px 20px;}
+        .nav{background:var(--card);padding:20px;text-align:center;border-bottom:1px solid rgba(0,229,255,0.2);margin-bottom:30px;}
+        .nav a{color:var(--neon);margin:0 20px;text-decoration:none;font-size:18px;transition: 0.3s}
+        .nav a:hover{color:var(--blue);}
+        .container{max-width:1400px;margin:0 auto;display:grid;grid-template-columns:65% 33%;gap:2%;}
+        .card{background:var(--card);border-radius:12px;padding:24px;border:1px solid rgba(0,229,255,0.15);margin-bottom:20px;}
+        .card-title{font-size:20px;color:var(--neon);margin-bottom:20px;padding-left:12px;border-left:4px solid var(--blue);}
+        .img-container{width:100%;height:500px;background:#0a101f;border-radius:8px;display:flex;align-items:center;justify-content:center;overflow:hidden;position: relative;}
+        .empty-tip{color:var(--gray);}
+        .loading{position:absolute;width:100%;height:100%;background:rgba(0,0,0,0.7);display:none;align-items:center;justify-content:center;z-index:10;}
+        .loader{width:50px;height:50px;border:3px solid rgba(0,229,255,0.2);border-top:3px solid var(--neon);border-radius:50%;animation:spin 1s linear infinite;}
+        @keyframes spin{0%{transform:rotate(0deg);}100%{transform:rotate(360deg);}}
+        .btn-group{display:flex;gap:15px;margin-top:20px;flex-wrap:wrap;}
+        .btn{padding:12px 30px;border:none;border-radius:6px;font-size:16px;cursor:pointer;transition: 0.2s}
+        .btn-primary{background:linear-gradient(90deg,#0099ff,#00e5ff);color:white;}
+        .btn-warning{background:linear-gradient(90deg,#ffaa00,#ff6600);color:white;}
+        .btn:disabled{opacity:0.6;cursor: not-allowed;}
+        #imgUpload{display:none;}
+        .data-item{margin-bottom:20px;}
+        .data-label{color:var(--gray);font-size:15px;}
+        .data-value{font-size:32px;font-weight:bold;}
+        .progress-bar{width:100%;height:8px;background:#1a243a;border-radius:4px;margin-top:6px;}
+        .progress{height:100%;border-radius:4px;background:var(--orange);}
+        .badge{padding:6px 16px;border-radius:20px;font-size:14px;}
+        .badge-success{background:rgba(0,255,136,0.15);color:var(--green);}
+        .badge-danger{background:rgba(255,51,102,0.15);color:var(--red);}
+        .warn-item{padding:12px;background:rgba(26,36,58,0.6);border-left:4px solid var(--red);border-radius:6px;margin-bottom:8px;}
+        .warn-normal{border-left-color:var(--green);}
+        .toast{position:fixed;top:30px;right:30px;padding:14px 25px;background:var(--card);border-left:4px solid var(--neon);border-radius:6px;color:white;z-index:999;transform:translateX(120%);transition:0.3s;}
+        .toast.show{transform:translateX(0);}
+        video{width:100%;height:100%;border-radius: 8px; object-fit: contain; background:#000;}
+        .chart-box{width:100%;height:220px;background:#121a2f;border-radius:8px;border:1px solid rgba(0,229,255,0.2);margin-top:10px;}
+        #chart{width:100%;height:100%;}
+    </style>
+</head>
+<body>
+<div class="nav">
+    <a href="/">首页</a>
+    <a href="/detect/">图片检测</a>
+    <a href="/video/">视频检测</a>
+    <a href="/record/">历史记录</a>
+    <a href="/agent/">智能体助手</a>
+    <a href="/realtime/">实时摄像头检测</a>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="container">
+    <div class="left">
+        <div class="card">
+            <h2 class="card-title">视频人群逐帧检测</h2>
+            <div class="img-container" id="imgBox">
+                <div class="loading" id="loading"><div class="loader"></div></div>
+                <span class="empty-tip">请上传人群视频</span>
+            </div>
+            <div class="btn-group">
+                <input type="file" id="imgUpload" accept="video/*">
+                <label for="imgUpload" class="btn btn-primary">选择视频</label>
+                <button class="btn btn-primary" onclick="startDetect()">开始逐帧检测</button>
+                <button class="btn btn-warning" onclick="resetPage()">重置</button>
+            </div>
+        </div>
+        <div class="card">
+            <h2 class="card-title">📈 实时人数变化曲线</h2>
+            <div class="chart-box">
+                <canvas id="chart"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="right">
+        <div class="card">
+            <h2 class="card-title">检测结果</h2>
+            <div class="data-item">
+                <div class="data-label">视频平均人数</div>
+                <div class="data-value" id="peopleNum">0</div>
+            </div>
+            <div class="data-item">
+                <div class="data-label">平均人群密度</div>
+                <div class="data-value" id="densityVal">0.0</div>
+                <div class="progress-bar"><div id="densityProgress" class="progress" style="width:0%"></div></div>
+            </div>
+            <div class="data-item">
+                <div class="data-label">整体拥挤状态</div>
+                <div class="badge badge-success" id="crowdStatus">正常</div>
+            </div>
+        </div>
+        <div class="card">
+            <h2 class="card-title">异常告警</h2>
+            <div id="warnList">
+                <div class="warn-item warn-normal">系统正常运行中</div>
+            </div>
+        </div>
+
+        <!-- 👇 👇 👇 新增：AI 安全分析面板（和图片检测统一） -->
+        <div class="card">
+            <h2 class="card-title">🤖 AI 安全分析</h2>
+            <div id="aiAnalysis" style="color:#fff; line-height:1.6; font-size:15px; padding:12px; border-radius:8px; background:rgba(26,36,58,0.6);">
+                请上传视频并完成检测，AI 将自动分析人群状态与安全建议
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<script>
+    const imgUpload = document.getElementById('imgUpload');
+    const imgBox = document.getElementById('imgBox');
+    const loading = document.getElementById('loading');
+    const toast = document.getElementById('toast');
+    const densityProgress = document.getElementById('densityProgress');
+    const ctx = document.getElementById('chart').getContext('2d');
+    const aiAnalysis = document.getElementById('aiAnalysis'); // 新增
+    let chart;
+
+    function showToast(msg) {
+        toast.textContent = msg;
+        toast.classList.add('show');
+        setTimeout(() => toast.classList.remove('show'), 2800);
+    }
+
+    // 初始化图表
+    function initChart(data = []) {
+        if(chart) chart.destroy();
+        chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: data.map((_, i) => i+1),
+                datasets: [{
+                    label: '实时人数',
+                    data: data,
+                    borderColor: '#00e5ff',
+                    backgroundColor: 'rgba(0,229,255,0.15)',
+                    borderWidth: 2,
+                    tension: 0.3,
+                    fill: true,
+                    pointRadius: 1.5
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { labels: { color: '#fff' } } },
+                scales: {
+                    x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#a0b1c5' } },
+                    y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#a0b1c5' }, min:0 }
+                }
+            }
+        });
+    }
+
+    imgUpload.onchange = e => {
+        const file = e.target.files[0];
+        if (!file) return;
+        imgBox.innerHTML = `<video controls style="width:100%;height:100%;" src="${URL.createObjectURL(file)}"></video>`;
+        initChart();
+        aiAnalysis.innerText = "等待开始检测，检测完成后自动生成 AI 分析";
+        showToast('视频上传成功');
+    };
+
+    async function startDetect() {
+        if (!imgUpload.files[0]) {
+            showToast('请先上传视频！');
+            return;
+        }
+
+        loading.style.display = 'flex';
+        document.querySelectorAll('.btn').forEach(b => b.disabled = true);
+
+        const fd = new FormData();
+        fd.append('video', imgUpload.files[0]);
+
+        try {
+            const res = await fetch('/api/video_detect/', { method: 'POST', body: fd });
+            const data = await res.json();
+
+            if (data.error) {
+                showToast('检测失败：' + data.error);
+                return;
+            }
+
+            const videoUrl = data.video_url + "?t=" + new Date().getTime();
+            imgBox.innerHTML = `
+                <video controls autoplay loop style="width:100%;height:100%;">
+                    <source src="${videoUrl}" type="video/mp4">
+                    您的浏览器不支持播放MP4视频
+                </video>
+            `;
+
+            document.getElementById('peopleNum').innerText = data.avg_people;
+            document.getElementById('densityVal').innerText = data.avg_density;
+            densityProgress.style.width = Math.min(data.avg_density, 100) + '%';
+
+            const statusEl = document.getElementById('crowdStatus');
+            const warnList = document.getElementById('warnList');
+
+            if (data.is_crowd) {
+                statusEl.className = 'badge badge-danger';
+                statusEl.innerText = '拥挤';
+                warnList.innerHTML = `<div class="warn-item">⚠️ 人群拥挤</div>`;
+                showToast('检测完成：视频出现拥挤');
+            } else {
+                statusEl.className = 'badge badge-success';
+                statusEl.innerText = '正常';
+                warnList.innerHTML = `<div class="warn-item warn-normal">✅ 状态正常</div>`;
+                showToast('✅ 检测完成，带框视频已播放');
+            }
+
+            // 更新曲线图
+            if(data.realtime_counts) {
+                initChart(data.realtime_counts);
+            }
+
+            // ======================
+            // 👇 👇 👇 新增：AI 分析（和图片共用接口）
+            // ======================
+            fetch("/api/ai_analysis/", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    count: data.avg_people,
+                    density: data.avg_density,
+                    is_abnormal: data.is_crowd
+                })
+            })
+            .then(res => res.json())
+            .then(aiRes => {
+                aiAnalysis.innerText = aiRes.analysis;
+            })
+            .catch(err => {
+                aiAnalysis.innerText = "AI 分析服务暂时不可用";
+            });
+
+        } catch (err) {
+            console.error(err);
+            showToast('❌ 检测失败，请查看后端日志');
+        } finally {
+            loading.style.display = 'none';
+            document.querySelectorAll('.btn').forEach(b => b.disabled = false);
+        }
+    }
+
+    function resetPage() {
+        imgBox.innerHTML = '<span class="empty-tip">请上传人群视频</span>';
+        imgUpload.value = '';
+        document.getElementById('peopleNum').innerText = '0';
+        document.getElementById('densityVal').innerText = '0.0';
+        densityProgress.style.width = '0%';
+        document.getElementById('crowdStatus').className = 'badge badge-success';
+        document.getElementById('crowdStatus').innerText = '正常';
+        document.getElementById('warnList').innerHTML = '<div class="warn-item warn-normal">系统正常运行中</div>';
+        aiAnalysis.innerText = "请上传视频并完成检测，AI 将自动分析人群状态与安全建议";
+        initChart();
+        showToast('已重置');
+    }
+
+    // 页面加载完成初始化图表
+    window.onload = function() {
+        initChart();
+    }
+</script>
+</body>
+</html>
