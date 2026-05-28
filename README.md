@@ -26,3 +26,7 @@ cd src && python track.py --source ../test_video.mp4
 
 测试视频：将 test_video.mp4 放置在项目根目录下 视频链接：https://pan.baidu.com/s/1VOVy0kcXvwDX03QE56JmEw
 提取码：pd63
+
+模型与演示
+ [下载训练权重 best.pt](https://github.com/yusheng-ll/Object-Detection-and-Recognition/releases/tag/v1.0)
+ [测试视频](同上链接)
