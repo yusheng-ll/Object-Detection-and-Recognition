@@ -62,7 +62,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'crowd_system',
         'USER': 'root',
-        'PASSWORD': 'du05067304',
+        'PASSWORD': '***********',
         'HOST': '127.0.0.1',
         'PORT': '3306',
     }
