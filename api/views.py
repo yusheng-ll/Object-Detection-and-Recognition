@@ -100,7 +100,7 @@ def clear_records(request):
 
 
 # ====================== 阿里云百炼配置 只改这里 ======================
-ALI_API_KEY = "sk-d7586de1dc7e4034905569d1f209e3b4"
+ALI_API_KEY = "API_KEY"
 ALI_MODEL = "qwen-turbo"
 ALI_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
 # =================================================================
