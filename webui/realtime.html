@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>智能人群密度监测系统 - 实时摄像头检测</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --bg: #090e1b; --card: #121a2f; --neon: #00e5ff;
+            --blue: #0099ff; --green: #00ff88; --red: #ff3366;
+            --text: #fff; --gray: #a0b1c5;
+        }
+        body { font-family: "Microsoft YaHei"; background: var(--bg); color: var(--text); padding: 0 20px 20px; }
+        .nav {
+            background: var(--card); padding: 20px; text-align: center;
+            border-bottom: 1px solid rgba(0,229,255,0.2); margin-bottom: 30px;
+        }
+        .nav a {
+            color: var(--neon); margin: 0 20px; text-decoration: none;
+            font-size: 18px; transition: 0.3s;
+        }
+        .nav a:hover { color: var(--blue); }
+
+        .container { max-width: 900px; margin: 0 auto; }
+        .card {
+            background: var(--card); border-radius: 12px; padding: 24px;
+            border: 1px solid rgba(0,229,255,0.15);
+            box-shadow: 0 0 20px rgba(0,0,0,0.3);
+        }
+        .card-title {
+            font-size: 22px; color: var(--neon); margin-bottom: 20px;
+            padding-left: 12px; border-left: 4px solid var(--blue);
+            text-align: center;
+        }
+
+        .video-wrap {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+            margin: 0 auto;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        video {
+            width: 100%;
+            background: #000;
+            display: block;
+        }
+        #drawCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        #tempCanvas {
+            display: none;
+        }
+        .result {
+            font-size: 18px; padding: 10px;
+            color: var(--green); margin-top: 15px;
+            text-align: center;
+        }
+        .btn {
+            padding: 12px 24px; background: linear-gradient(90deg, #0099ff, #00e5ff);
+            color: white; border: none; border-radius: 8px; cursor: pointer;
+            margin-top: 15px; display: block;
+            margin-left: auto; margin-right: auto;
+            transition: 0.3s;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 0 15px rgba(0,153,255,0.3);
+        }
+    </style>
+</head>
+<body>
+
+<div class="nav">
+    <a href="/">首页</a>
+    <a href="/detect/">图片检测</a>
+    <a href="/video/">视频检测</a>
+    <a href="/record/">历史记录</a>
+    <a href="/agent/">智能体助手</a>
+    <a href="/realtime/">实时摄像头检测</a>
+</div>
+
+<div class="container">
+    <div class="card">
+        <div class="card-title">📷 实时摄像头人群检测</div>
+        <div class="video-wrap">
+            <video id="video" autoplay playsinline muted></video>
+            <canvas id="drawCanvas"></canvas>
+        </div>
+        <div class="result" id="result">等待画面...</div>
+        <button class="btn" id="camBtn" onclick="startCamera()">打开摄像头</button>
+    </div>
+</div>
+
+<canvas id="tempCanvas"></canvas>
+
+<script>
+    const video = document.getElementById('video');
+    const drawCanvas = document.getElementById('drawCanvas');
+    const drawCtx = drawCanvas.getContext('2d');
+    const tempCanvas = document.getElementById('tempCanvas');
+    const tempCtx = tempCanvas.getContext('2d');
+    const resultText = document.getElementById('result');
+    const camBtn = document.getElementById('camBtn');
+
+    let stream = null;
+    let running = false;
+    // 前后端统一分辨率
+    const targetW = 480;
+    const targetH = 320;
+
+    function resizeDrawCanvas(){
+        drawCanvas.width = video.offsetWidth;
+        drawCanvas.height = video.offsetHeight;
+    }
+    window.addEventListener('resize', resizeDrawCanvas);
+
+    async function startCamera(){
+        if(stream){
+            stream.getTracks().forEach(track=>track.stop());
+            running = false;
+            stream = null;
+            video.srcObject = null;
+            resultText.innerText = "等待画面...";
+            resultText.style.color = '#00ff88';
+            drawCtx.clearRect(0,0,drawCanvas.width,drawCanvas.height);
+            camBtn.innerText = "打开摄像头";
+            return;
+        }
+
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({
+                video: { width: targetW, height: targetH, frameRate: 15 }
+            });
+            video.srcObject = stream;
+            video.play();
+
+            video.onloadedmetadata = ()=>{
+                resizeDrawCanvas();
+            };
+
+            running = true;
+            camBtn.innerText = "关闭摄像头";
+            sendFrameLoop();
+        } catch (err) {
+            alert("摄像头打开失败：" + err.message);
+            console.error(err);
+        }
+    }
+
+    async function sendFrameLoop(){
+        if(!running) return;
+
+        tempCanvas.width = targetW;
+        tempCanvas.height = targetH;
+        tempCtx.drawImage(video, 0, 0, targetW, targetH);
+
+        tempCanvas.toBlob(async blob=>{
+            try{
+                const formData = new FormData();
+                formData.append("frame", blob);
+                const controller = new AbortController();
+                setTimeout(() => controller.abort(), 500);
+
+                const res = await fetch('/api/realtime_detect/',{
+                    method:"POST",
+                    body: formData,
+                    signal: controller.signal
+                });
+
+                const data = await res.json();
+                drawBox(data.boxes || [], data.img_w || targetW, data.img_h || targetH);
+
+                resultText.innerText = `👥 人数：${data.count || 0} ｜ 📊 密度：${data.density || 0} ｜ ${data.abnormal ? '🔴 拥挤预警' : '🟢 状态正常'}`;
+                resultText.style.color = data.abnormal ? '#ff3366' : '#00ff88';
+            }catch(e){
+                console.warn("帧检测请求超时");
+            }
+            sendFrameLoop();
+        },"image/jpeg", 0.7);
+    }
+
+    function drawBox(boxes, srcW, srcH){
+        drawCtx.clearRect(0,0,drawCanvas.width,drawCanvas.height);
+        if (!boxes || boxes.length === 0) return;
+
+        const scaleX = drawCanvas.width / srcW;
+        const scaleY = drawCanvas.height / srcH;
+
+        drawCtx.strokeStyle = "#00e5ff";
+        drawCtx.lineWidth = 2;
+        drawCtx.font = "bold 14px Arial";
+
+        boxes.forEach((box, idx)=>{
+            let [x1,y1,x2,y2] = box;
+            let sx = x1 * scaleX;
+            let sy = y1 * scaleY;
+            let sw = (x2-x1)*scaleX;
+            let sh = (y2-y1)*scaleY;
+
+            drawCtx.strokeRect(sx, sy, sw, sh);
+            // 绘制人物编号标签
+            drawCtx.fillStyle = "rgba(0,229,255,0.8)";
+            let text = `人${idx+1}`;
+            let textW = drawCtx.measureText(text).width;
+            drawCtx.fillRect(sx, sy-18, textW+8, 18);
+            drawCtx.fillStyle = "#ffffff";
+            drawCtx.fillText(text, sx+4, sy-4);
+        });
+    }
+</script>
+
+</body>
+</html>

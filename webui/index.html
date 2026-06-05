@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>目标检测与识别系统 - 首页</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --bg: #090e1b; --card: #121a2f; --neon: #00e5ff;
+            --blue: #0099ff; --green: #00ff88; --text: #fff; --gray: #a0b1c5;
+            --red: #ff3366;
+        }
+        body {
+            /* ✅ 修复：加上 sans-serif 防止警告，color 加上 -- */
+            font-family: "Microsoft YaHei", sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            background-image:
+                radial-gradient(circle at 10% 10%, rgba(0,229,255,0.08), transparent 30%),
+                radial-gradient(circle at 90% 90%, rgba(0,153,255,0.08), transparent 30%);
+            background-attachment: fixed;
+        }
+
+        /* 导航栏基础样式 */
+        .nav {
+            background: var(--card); padding: 20px; text-align: center; border-bottom: 1px solid rgba(0,229,255,0.2);
+            position: relative;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        }
+        .nav a {
+            color: var(--neon); margin: 0 20px; text-decoration: none; font-size: 18px; transition: 0.3s;
+        }
+        .nav a:hover { color: var(--blue); text-shadow: 0 0 8px rgba(0,229,255,0.5); }
+
+        /* 新增：退出登录按钮样式 */
+        .btn-logout {
+            padding: 6px 16px;
+            background: transparent;
+            border: 1px solid var(--red);
+            color: var(--red);
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: 0.3s;
+        }
+        .btn-logout:hover {
+            background: var(--red);
+            color: white;
+        }
+
+        /* 右上角管理员按钮 */
+        .admin-btn {
+            padding: 8px 18px;
+            background: var(--red);
+            color: #fff;
+            border-radius: 8px;
+            text-decoration: none;
+            font-size: 14px;
+            transition: 0.3s;
+            box-shadow: 0 0 10px rgba(255,51,102,0.3);
+        }
+        .admin-btn:hover {
+            background: #ff5588;
+            box-shadow: 0 0 15px rgba(255,51,102,0.5);
+        }
+
+        /* 主页样式 */
+        .home { max-width: 1000px; margin: 80px auto; text-align: center; padding: 40px 20px; }
+        .home h1 { font-size: 48px; background: linear-gradient(90deg, #00e5ff, #0099ff); -webkit-background-clip: text; background-clip: text; color: transparent; margin-bottom: 24px; text-shadow: 0 0 30px rgba(0,229,255,0.3); }
+        .home p { color: var(--gray); font-size: 18px; margin-bottom: 60px; line-height: 1.8; max-width: 800px; margin-left: auto; margin-right: auto; }
+        .btn-box { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 24px; max-width: 800px; margin: 0 auto; }
+        .btn { padding: 18px 30px; border: none; border-radius: 10px; font-size: 18px; background: linear-gradient(90deg, #0099ff, #00e5ff); color: #fff; cursor: pointer; transition: 0.3s; text-decoration: none; box-shadow: 0 4px 15px rgba(0,153,255,0.2); display: flex; align-items: center; justify-content: center; gap: 8px; }
+        .btn:hover { transform: translateY(-4px); box-shadow: 0 8px 25px rgba(0,153,255,0.4); }
+    </style>
+</head>
+<body>
+
+    <div class="nav">
+        <!-- 中间菜单 -->
+        <div style="display: inline-block;">
+            <a href="/">首页</a>
+            <a href="/detect/">图片检测</a>
+            <a href="/video/">视频检测</a>
+            <a href="/record/">历史记录</a>
+            <a href="/agent/">智能体助手</a>
+            <a href="/realtime/">实时摄像头检测</a>
+        </div>
+
+        <!-- 🔑 右侧：用户状态与操作 -->
+        <div style="position: absolute; right: 30px; top: 50%; transform: translateY(-50%); display: flex; align-items: center; gap: 15px;">
+
+            {% if user.is_authenticated %}
+                <!-- ✅ 已登录状态 -->
+                <span style="color: var(--neon); font-size: 16px;">
+                    欢迎，<strong>{{ user.username }}</strong>
+                </span>
+
+                <!-- 只有管理员能看到后台入口 -->
+                {% if user.is_staff %}
+                <a href="/admin/" target="_blank" class="admin-btn">管理员后台</a>
+                {% endif %}
+
+                <!-- 退出登录表单 -->
+                <form action="{% url 'logout' %}" method="post" style="margin: 0;">
+                    {% csrf_token %}
+                    <button type="submit" class="btn-logout">退出登录</button>
+                </form>
+
+            {% else %}
+                <!-- ❌ 未登录状态 -->
+                <a href="/login/" style="color: var(--green); text-decoration: none; font-weight: bold; font-size: 16px;">登录</a>
+                <a href="/register/" style="color: var(--neon); border: 1px solid var(--neon); padding: 5px 15px; border-radius: 4px; text-decoration: none; font-size: 14px;">注册账号</a>
+            {% endif %}
+
+        </div>
+    </div>
+
+    <div class="home">
+<h1>目标检测与识别系统</h1>
+<p>基于人工智能视觉算法，实现多类别目标自动检测、识别与统计<br>
+适用于安防监控、交通管理、零售分析等场景</p>
+        <div class="btn-box">
+            <a href="/detect/" class="btn">📷 图片检测</a>
+            <a href="/video/" class="btn">🎬 视频检测</a>
+            <a href="/record/" class="btn">📊 查看历史记录</a>
+            <a href="/agent/" class="btn">🤖 智能体助手</a>
+            <a href="/realtime/" class="btn">📹 实时摄像头检测</a>
+        </div>
+    </div>
+</body>
+</html>
