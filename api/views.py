@@ -31,7 +31,7 @@ except Exception as e:
     model = None
 
 # 阿里云百炼配置
-ALI_API_KEY = "sk-d7586de1dc7e4034905569d1f209e3b4"
+ALI_API_KEY = "********************"
 ALI_MODEL = "qwen-turbo"
 ALI_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
 
