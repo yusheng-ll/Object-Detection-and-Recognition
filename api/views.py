@@ -1,5 +1,7 @@
+# api/views.py
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+import time
 from PIL import Image
 import os
 from django.conf import settings
@@ -7,379 +9,489 @@ from ultralytics import YOLO
 import numpy as np
 import json
 import requests
-from .models import DetectRecord
+from .models import DetectionRecord, ChatRecord
 import cv2
 import tempfile
-from . import views
 
-# 加载模型
-model = YOLO("best.pt")
+# ====================== 全局配置 ======================
+# 🔑 场景面积估算（平方米）- 根据实际摄像头覆盖范围调整
+SCENE_AREA_SQM = 100.0
 
+# 上传目录
 UPLOAD_DIR = os.path.join(settings.BASE_DIR, 'uploads')
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# 🔑 加载 best1.pt 模型
+try:
+    model = YOLO("best1.pt")
+    print(f"✅ YOLO 模型加载成功: best1.pt")
+    print(f"📦 支持类别: {list(model.names.values())[:10]}...")
+except Exception as e:
+    print(f"⚠️ 模型加载失败: {e}")
+    model = None
 
+# 阿里云百炼配置
+ALI_API_KEY = "sk-d7586de1dc7e4034905569d1f209e3b4"
+ALI_MODEL = "qwen-turbo"
+ALI_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
+
+
+# ====================== 🎯 图片检测接口 ======================
 @csrf_exempt
 def predict_crowd(request):
+    """目标检测与密度统计 API"""
     if request.method == 'POST' and request.FILES.get('image'):
-        img_file = request.FILES['image']
-        img = Image.open(img_file).convert('RGB')
-        w, h = img.size
-        img_area = w * h
+        try:
+            img_file = request.FILES['image']
+            img = Image.open(img_file).convert('RGB')
+            w, h = img.size
 
-        # YOLO 推理
-        results = model(img)
-        boxes = results[0].boxes
-        count = len(boxes)
+            if model is None:
+                return JsonResponse({"code": 500, "error": "模型未加载"}, status=500)
 
-        # ====================== 【针对小目标优化的密度算法】 ======================
-        if count == 0:
-            density_score = 0.0
-            abnormal = False
-        else:
-            # 1. 过滤边缘误检
-            valid_boxes = []
+            # 🔍 YOLO 推理
+            results = model(img, verbose=False)
+            boxes = results[0].boxes
+            total_count = len(boxes)
+
+            # 📊 类别统计
+            class_stats = {}
             for box in boxes:
-                x1, y1, x2, y2 = box.xyxy[0]
-                if (x1 > w * 0.03 and x2 < w * 0.97 and
-                        y1 > h * 0.03 and y2 < h * 0.97):
-                    valid_boxes.append(box)
+                cls_id = int(box.cls[0])
+                cls_name = model.names.get(cls_id, f"class_{cls_id}")
+                class_stats[cls_name] = class_stats.get(cls_name, 0) + 1
 
-            valid_count = len(valid_boxes) 
-            if valid_count == 0:
-                valid_count = count
+            # 📏 真实密度计算
+            density = round(total_count / SCENE_AREA_SQM, 2)
 
-            # 2. 核心优化：按“人头数量”计算密度，专门适配小目标
-            base_area = 1000000  # 100万像素基准
-            people_per_million = (valid_count / img_area) * base_area
+            # ⚠️ 拥挤判定
+            is_abnormal = (density > 3.0) or (total_count > 40)
 
-            density_score = round(people_per_million * 1.2, 1)
-            density_score = min(density_score, 100)
+            # 💾 保存带框结果图
+            res_img = results[0].plot()
+            res_img = Image.fromarray(res_img[..., ::-1])
+            detected_filename = f"detected_{img_file.name}"
+            detected_img_path = os.path.join(UPLOAD_DIR, detected_filename)
+            res_img.save(detected_img_path)
 
-            # 4. 拥挤判断
-            abnormal = (valid_count > 40) or (density_score > 70)
+            # 🤖 生成 AI 分析
+            ai_analysis = generate_ai_analysis(total_count, density, class_stats)
 
-        # 保存原始图片
-        original_img_path = os.path.join(UPLOAD_DIR, img_file.name)
-        img.save(original_img_path)
+            # 🗄️ 保存到数据库
+            DetectionRecord.objects.create(
+                filename=img_file.name,
+                file_path=f"/uploads/{detected_filename}",
+                total_count=total_count,  # ✅ 使用新字段
+                density_value=density,  # ✅ 使用新字段
+                class_data=class_stats,
+                is_abnormal=is_abnormal
+            )
+            print(f"✅ 检测完成: {total_count}个目标, 密度{density}个/㎡")
 
-        # 保存带框图片
-        res_img = results[0].plot()
-        res_img = Image.fromarray(res_img[..., ::-1])
-        detected_img_path = os.path.join(UPLOAD_DIR, "detected_" + img_file.name)
-        res_img.save(detected_img_path)
+            return JsonResponse({
+                "code": 200,
+                "total_count": total_count,
+                "density": density,
+                "is_abnormal": is_abnormal,
+                "class_stats": class_stats,
+                "detected_img_url": f"/uploads/{detected_filename}",
+                "ai_analysis": ai_analysis
+            })
 
-        # ====================== ✅ 【保存记录到 MySQL】 ======================
-        DetectRecord.objects.create(
-            filename=img_file.name,
-            file_path=f"/uploads/detected_{img_file.name}",
-            crowd_count=count,
-            density_level=str(density_score),
-            is_abnormal=abnormal
-        )
+        except Exception as e:
+            import traceback
+            print(f"❌ 检测错误: {e}\n{traceback.format_exc()}")
+            return JsonResponse({"code": 500, "error": str(e)}, status=500)
 
-        return JsonResponse({
-            "code": 200,
-            "count": count,
-            "density": density_score,
-            "abnormal": abnormal,
-            "detected_img_url": f"/uploads/detected_{img_file.name}"
-        })
-
-    return JsonResponse({"code": 400, "error": "Please upload image"}, status=400)
+    return JsonResponse({"code": 400, "error": "请上传图片"}, status=400)
 
 
-# ====================== 【清空所有历史记录接口】 ======================
+# ====================== 🤖 AI 分析生成函数 ======================
+def generate_ai_analysis(count, density, class_stats):
+    """根据检测结果生成专业建议"""
+    top_classes = sorted(class_stats.items(), key=lambda x: x[1], reverse=True)[:3]
+    top_str = ", ".join([f"{cls}({cnt})" for cls, cnt in top_classes]) if top_classes else "无"
+
+    if density > 4.0:
+        risk = "高风险"
+        suggestions = [
+            f"⚠️ 密度过高({density}个/㎡)，建议立即疏导或限流",
+            "开启备用出口，增派工作人员引导",
+            "启动应急预案，避免踩踏风险"
+        ]
+    elif density > 2.5:
+        risk = "中风险"
+        suggestions = [
+            "密度接近警戒值，建议加强现场引导",
+            "优化空间布局，避免局部聚集",
+            "关注高峰期人流变化趋势"
+        ]
+    else:
+        risk = "低风险"
+        suggestions = [
+            "当前目标分布均匀，系统运行正常",
+            "建议保持定期巡检",
+            "可考虑优化空间利用率"
+        ]
+
+    return {
+        "risk_level": risk,
+        "summary": f"共检测 {count} 个目标，密度 {density} 个/㎡。主要类别：{top_str}。",
+        "suggestions": suggestions,
+        "density": density
+    }
+
+
+# ====================== 🗑️ 清空历史记录 ======================
 @csrf_exempt
 def clear_records(request):
     if request.method == "POST":
-        # 删除数据库所有记录
-        DetectRecord.objects.all().delete()
-        return JsonResponse({"code": 200, "msg": "清空成功"})
-    return JsonResponse({"code": 400, "msg": "请求方法错误"})
+        try:
+            count = DetectionRecord.objects.count()
+            DetectionRecord.objects.all().delete()
+            return JsonResponse({"code": 200, "msg": f"已清空 {count} 条记录"})
+        except Exception as e:
+            return JsonResponse({"code": 500, "error": str(e)}, status=500)
+    return JsonResponse({"code": 400, "msg": "仅支持 POST 请求"}, status=400)
 
 
-# ====================== 阿里云百炼配置 只改这里 ======================
-ALI_API_KEY = "API_KEY"
-ALI_MODEL = "qwen-turbo"
-ALI_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
-# =================================================================
-
+# ====================== 💬 AI 智能对话 ======================
 @csrf_exempt
 def ai_chat(request):
     if request.method == "POST":
         try:
             data = json.loads(request.body)
             user_msg = data.get("message", "").strip()
+            if not user_msg:
+                return JsonResponse({"answer": "请输入问题"})
 
-            # 获取最新一条检测记录，给大模型做参考
-            latest = DetectRecord.objects.order_by("-create_time").first()
+            # 获取最新检测记录作为上下文
+            latest = DetectionRecord.objects.order_by("-create_time").first()
 
-            # 构造系统角色 + 带入最新检测数据
-            system_prompt = """
-你是智能人群密度监测系统专属AI助手，专业解答人群检测、拥挤判定、安全疏散、系统使用问题。
-当前系统规则：人数超过40人 或 密度大于70分 判定为拥挤。
-"""
+            system_prompt = """你是目标检测与识别系统专属AI助手，专业解答目标识别、密度分析、安全预警问题。
+当前系统规则：密度>3个/㎡ 或 总目标数>40 判定为异常。请用简洁专业的中文回答。"""
+
             if latest:
-                system_prompt += f"""
-最新一次检测数据：
-检测人数：{latest.crowd_count} 人
-密度分值：{latest.density_level}
-是否拥挤：{"是" if latest.is_abnormal else "否"}
-请基于以上真实检测数据，专业、简洁回答用户问题，并可以给出疏散和管控建议。
-"""
+                # ✅ 修复：使用正确的字段名 total_count 和 density_value
+                system_prompt += f"\n【最新检测】总数:{latest.total_count}, 密度:{latest.density_value}个/㎡, 异常:{'是' if latest.is_abnormal else '否'}"
 
-            headers = {
-                "Authorization": f"Bearer {ALI_API_KEY}",
-                "Content-Type": "application/json"
-            }
-
+            headers = {"Authorization": f"Bearer {ALI_API_KEY}", "Content-Type": "application/json"}
             payload = {
                 "model": ALI_MODEL,
-                "input": {
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_msg}
-                    ]
-                },
+                "input": {"messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_msg}
+                ]},
                 "parameters": {"temperature": 0.7}
             }
 
-            resp = requests.post(ALI_URL, headers=headers, json=payload, timeout=20)
-            res_json = resp.json()
-            answer = res_json["output"]["text"].strip()
+            resp = requests.post(ALI_URL, headers=headers, json=payload, timeout=30)
+            if resp.status_code != 200:
+                return JsonResponse({"answer": f"AI服务异常: {resp.status_code}"})
 
-            # ========== 关键：保存对话到数据库 ==========
-            from .models import ChatRecord
-            ChatRecord.objects.create(
-                message=user_msg,
-                reply=answer
-            )
+            res_json = resp.json()
+            answer = res_json.get("output", {}).get("text", "AI未返回内容").strip()
+
+            # 保存对话记录
+            ChatRecord.objects.create(message=user_msg, reply=answer)
 
             return JsonResponse({"answer": answer})
 
         except Exception as e:
-            return JsonResponse({"answer": f"AI服务异常：{str(e)}"})
+            import traceback
+            print(f"❌ AI对话错误: {e}\n{traceback.format_exc()}")
+            return JsonResponse({"answer": f"系统异常: {str(e)}"})
+    return JsonResponse({"answer": "仅支持POST请求"}, status=400)
 
-    return JsonResponse({"answer": "仅支持POST请求"})
 
-# 获取AI历史聊天记录
 @csrf_exempt
 def get_chat_history(request):
-    from .models import ChatRecord
-    records = ChatRecord.objects.all()[:20]  # 取最近20条
-    data = []
-    for item in records:
-        data.append({
-            "user_msg": item.message,
-            "ai_reply": item.reply,
-            "time": item.create_time.strftime("%Y-%m-%d %H:%M:%S")
-        })
-    # 倒序，最新在最后
+    records = ChatRecord.objects.all().order_by('-create_time')[:20]
+    data = [{"user_msg": r.message, "ai_reply": r.reply, "time": r.create_time.strftime("%Y-%m-%d %H:%M:%S")} for r in
+            records]
     data.reverse()
     return JsonResponse({"list": data})
 
-# 清空 AI 聊天记录
+
 @csrf_exempt
 def clear_chat_history(request):
-    from .models import ChatRecord
     if request.method == "POST":
-        ChatRecord.objects.all().delete()
-        return JsonResponse({"code": 200, "msg": "清空成功"})
-    return JsonResponse({"code": 400, "msg": "请求错误"})
+        try:
+            count = ChatRecord.objects.count()
+            ChatRecord.objects.all().delete()
+            return JsonResponse({"code": 200, "msg": f"已清空 {count} 条记录"})
+        except Exception as e:
+            return JsonResponse({"code": 500, "error": str(e)}, status=500)
+    return JsonResponse({"code": 400, "msg": "请求错误"}, status=400)
 
 
+# ====================== 📹 实时帧检测 ======================
 @csrf_exempt
 def realtime_detect(request):
     if request.method == 'POST' and request.FILES.get('frame'):
-        frame_file = request.FILES['frame']
-        img = Image.open(frame_file).convert('RGB')
+        try:
+            frame_file = request.FILES['frame']
+            img = Image.open(frame_file).convert('RGB').resize((480, 320))
 
-        # 严格对齐前端 480*320
-        target_w, target_h = 480, 320
-        img = img.resize((target_w, target_h))
+            if model is None:
+                return JsonResponse({'count': 0, 'density': 0, 'abnormal': False, 'boxes': []}, status=500)
 
-        results = model(img)
-        boxes = results[0].boxes
-        count = len(boxes)
+            results = model(img, verbose=False)
+            count = len(results[0].boxes)
+            box_list = [box.xyxy[0].cpu().numpy().tolist() for box in results[0].boxes]
 
-        box_list = []
-        for box in boxes:
-            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-            box_list.append([float(x1), float(y1), float(x2), float(y2)])
+            density = round(count / SCENE_AREA_SQM, 2)
+            abnormal = (count > 20) or (density > 3.0)
 
-        # 密度计算
-        img_area = target_w * target_h
-        valid_count = len(box_list)
+            return JsonResponse({
+                'count': count,
+                'density': density,
+                'abnormal': abnormal,
+                'boxes': box_list,
+                'img_w': 480,
+                'img_h': 320
+            })
+        except Exception as e:
+            return JsonResponse({'count': 0, 'density': 0, 'abnormal': False, 'boxes': [], 'error': str(e)}, status=500)
+    return JsonResponse({'count': 0, 'density': 0, 'abnormal': False, 'boxes': []}, status=400)
 
-        base_area = 1000000
-        density_score = round((valid_count / img_area) * base_area * 1.2, 1)
-        density_score = min(density_score, 100)
-        abnormal = (valid_count > 20) or (density_score > 70)
 
-        return JsonResponse({
-            'count': count,
-            'density': density_score,
-            'abnormal': abnormal,
-            'boxes': box_list,
-            'img_w': target_w,
-            'img_h': target_h
-        })
-    # 异常兜底返回
-    return JsonResponse({
-        'count': 0,
-        'density': 0,
-        'abnormal': False,
-        'boxes': [],
-        'img_w': 480,
-        'img_h': 320
-    })
-
+# ====================== 🎬 视频检测 ======================
 @csrf_exempt
 def video_detect(request):
     if request.method == 'POST' and request.FILES.get('video'):
-        print("收到视频检测请求")
-        video_file = request.FILES['video']
-        temp_video = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-        for chunk in video_file.chunks():
-            temp_video.write(chunk)
-        temp_video.close()
+        try:
+            video_file = request.FILES['video']
+            print(f"📥 收到视频文件: {video_file.name}")
 
-        cap = cv2.VideoCapture(temp_video.name)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            temp_video = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4', dir=UPLOAD_DIR)
+            for chunk in video_file.chunks():
+                temp_video.write(chunk)
+            temp_video.close()
+            temp_path = temp_video.name
 
-        fourcc = cv2.VideoWriter_fourcc(*'avc1')
-        filename_only = os.path.basename(temp_video.name).rsplit('.', 1)[0]
-        out_video_name = f"detect_{filename_only}.mp4"
-        out_video_path = os.path.join(UPLOAD_DIR, out_video_name)
-        out = cv2.VideoWriter(out_video_path, fourcc, fps, (width, height))
+            cap = cv2.VideoCapture(temp_path)
+            if not cap.isOpened():
+                os.unlink(temp_path)
+                return JsonResponse({"code": 400, "error": "无法读取视频文件"}, status=400)
 
-        people_list = []
-        density_list = []
-        realtime_counts = []
-        sample_interval = 3
-        frame_idx = 0
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            duration = total_frames / fps if fps > 0 else 0
 
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
+            out_name = f"detect_{os.path.basename(video_file.name).replace('.mp4', '')}_{int(time.time())}.mp4"
+            out_path = os.path.join(UPLOAD_DIR, out_name)
 
-            if frame_idx % sample_interval != 0:
+            # 尝试多种编码器
+            # ✅ 修复：直接使用 mp4v 编码器，避免 libopenh264 版本冲突
+            # mp4v 是 OpenCV 最基础支持的编码，虽然浏览器兼容性稍差，但一定能生成文件
+            # ✅ 尝试多种编码器，优先使用 H.264 (avc1)，如果不行则回退到 mp4v
+            fourcc_codes = ['avc1', 'H264', 'mp4v', 'XVID']
+            fourcc = None
+            out = None
+
+            for code in fourcc_codes:
+                try:
+                    fourcc = cv2.VideoWriter_fourcc(*code)
+                    out = cv2.VideoWriter(out_path, fourcc, fps, (width, height))
+                    if out.isOpened():
+                        print(f"✅ 成功使用编码器: {code}")
+                        break
+                    else:
+                        out.release()
+                        out = None
+                except Exception as e:
+                    continue
+
+            if not out or not out.isOpened():
+                raise Exception("无法创建输出视频文件，请检查 OpenCV 是否支持 H.264/mp4v 编码")
+
+            if not out or not out.isOpened():
+                raise Exception("无法创建输出视频文件")
+
+            # 🔑 数据收集（确保在循环前初始化）
+            people_list, density_list, timeline = [], [], []
+            all_class_stats = {}
+            sample_interval = max(1, int(fps * 0.5))
+            frame_idx = 0
+            processed_frames = 0
+
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret: break
+
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                img = Image.fromarray(frame_rgb)
+                w, h = img.size
+
+                if model:
+                    results = model(img, verbose=False)
+
+                    # 1. 过滤边缘框
+                    valid_boxes = []
+                    for box in results[0].boxes:
+                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                        if (x1 > w * 0.03 and x2 < w * 0.97 and
+                                y1 > h * 0.03 and y2 < h * 0.97):
+                            valid_boxes.append(box)
+
+                    valid_count = len(valid_boxes)
+
+                    # 2. 绘制检测框（每一帧都画）
+                    for box in valid_boxes:
+                        x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 229, 255), 2)
+                        cls_name = model.names.get(int(box.cls[0]), "obj")
+                        cv2.putText(frame, cls_name, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 229, 255), 1)
+
+                    out.write(frame)
+                    processed_frames += 1
+
+                    # 3. 【关键】只在采样帧里统计类别和记录数据
+                    if frame_idx % sample_interval == 0:
+                        density = round(valid_count / SCENE_AREA_SQM, 2)
+                        timestamp = frame_idx / fps
+
+                        people_list.append(valid_count)
+                        density_list.append(density)
+                        timeline.append({
+                            'time': round(timestamp, 2),
+                            'count': valid_count,
+                            'density': density
+                        })
+
+                        # ✅ 只在采样时累加类别统计
+                        for box in valid_boxes:
+                            cls_id = int(box.cls[0])
+                            cls_name = model.names.get(cls_id, f"class_{cls_id}")
+                            all_class_stats[cls_name] = all_class_stats.get(cls_name, 0) + 1
+
                 frame_idx += 1
-                continue
+            # ... (后面的代码保持不变)
+            cap.release()
+            out.release()
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
 
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(frame_rgb)
-            w, h = img.size
-            img_area = w * h
+            if not os.path.exists(out_path):
+                raise Exception(f"输出视频文件未生成: {out_path}")
 
-            results = model(img)
-            boxes = results[0].boxes
-            current_count = len(boxes)
+            avg_people = int(np.mean(people_list)) if people_list else 0
+            avg_density = float(np.mean(density_list)) if density_list else 0.0
+            is_abnormal = (avg_density > 3.0) or (avg_people > 40)
+            video_url = f"/uploads/{out_name}"
 
-            valid_boxes = []
-            for box in boxes:
-                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                if (x1 > w * 0.03 and x2 < w * 0.97 and
-                    y1 > h * 0.03 and y2 < h * 0.97):
-                    valid_boxes.append([int(x1), int(y1), int(x2), int(y2)])
-            valid_count = len(valid_boxes) if valid_boxes else current_count
+            sampled_frames = len(timeline)
+            avg_class_stats = {
+                cls: round(count / sampled_frames, 2)
+                for cls, count in all_class_stats.items()
+            } if sampled_frames > 0 else {}
 
-            for (x1, y1, x2, y2) in valid_boxes:
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 229, 255), 2)
-                cv2.putText(frame, "person", (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 229, 255), 1)
+            ai_analysis = generate_ai_analysis(avg_people, avg_density, all_class_stats)
 
-            out.write(frame)
+            DetectionRecord.objects.create(
+                filename=video_file.name,
+                file_path=video_url,
+                total_count=avg_people,
+                density_value=round(avg_density, 2),
+                class_data=all_class_stats,
+                is_abnormal=is_abnormal
+            )
 
-            base_area = 1000000
-            people_per_million = (valid_count / img_area) * base_area
-            density = round(people_per_million * 1.2, 1)
-            density = min(density, 100)
+            return JsonResponse({
+                "code": 200,
+                "avg_people": avg_people,
+                "avg_density": round(avg_density, 2),
+                "is_crowd": is_abnormal,
+                "video_url": video_url,
+                "sample_count": len(timeline),
+                "processed_frames": processed_frames,
+                "video_info": {"duration": round(duration, 2), "fps": round(fps, 2)},
+                "class_stats_total": all_class_stats,
+                "class_stats_avg": avg_class_stats,
+                "total_detections": sum(all_class_stats.values()),
+                "ai_analysis": ai_analysis,
+                "density_timeline": timeline
+            })
 
-            people_list.append(valid_count)
-            density_list.append(density)
-            realtime_counts.append(valid_count)
-            frame_idx += 1
+        except Exception as e:
+            import traceback
+            print(f"❌ 视频检测错误: {e}\n{traceback.format_exc()}")
+            return JsonResponse({"code": 500, "error": str(e)}, status=500)
 
-        cap.release()
-        out.release()
-        os.unlink(temp_video.name)
+    return JsonResponse({"code": 400, "error": "请上传视频文件"}, status=400)
 
-        if not people_list:
-            avg_people = 0
-            avg_density = 0.0
-        else:
-            avg_people = int(np.mean(people_list))
-            avg_density = float(np.mean(density_list))
 
-        is_abnormal = (avg_people > 40) or (avg_density > 70)
-        video_url = f"/uploads/{out_video_name}"
-
-        DetectRecord.objects.create(
-            filename=out_video_name,
-            file_path=video_url,
-            crowd_count=avg_people,
-            density_level=str(round(avg_density, 1)),
-            is_abnormal=is_abnormal,
-            is_video=True
-        )
-
-        print(f"视频检测完成，平均人数：{avg_people}")
-        return JsonResponse({
-            "avg_people": avg_people,
-            "avg_density": round(avg_density, 1),
-            "is_crowd": is_abnormal,
-            "video_url": video_url,
-            "realtime_counts": realtime_counts
-        })
-
-    return JsonResponse({"code": 400, "error": "请上传视频文件"})
-
+# ====================== 🧠 独立 AI 分析接口 ======================
 @csrf_exempt
 def ai_analysis(request):
     if request.method == "POST":
-        data = json.loads(request.body)
-        count = data.get("count", 0)
-        density = data.get("density", 0)
-        is_abnormal = data.get("is_abnormal", False)
+        try:
+            data = json.loads(request.body)
+            count = data.get("count", 0)
+            density = data.get("density", 0)
+            is_abnormal = data.get("is_abnormal", False)
+            class_stats = data.get("class_stats", {})
 
-        # 传给大模型
-        prompt = f"""
-你是人群安全监测专家。
+            top_classes = ", ".join(
+                [f"{k}({v})" for k, v in sorted(class_stats.items(), key=lambda x: x[1], reverse=True)[:3]])
+            prompt = f"""你是目标检测安全专家。
+检测数据：总数{count}个，密度{density}个/㎡，主要类别:{top_classes or '无'}，异常:{'是' if is_abnormal else '否'}。
+请用专业简洁的中文（≤100字）回答：1.当前状态 2.风险等级 3.管理建议。"""
 
-当前检测数据：
-- 人数：{count} 人
-- 密度评分：{density}
-- 是否拥挤：{"是" if is_abnormal else "否"}
+            headers = {"Authorization": f"Bearer {ALI_API_KEY}", "Content-Type": "application/json"}
+            payload = {
+                "model": ALI_MODEL,
+                "input": {"messages": [{"role": "user", "content": prompt}]},
+                "parameters": {"temperature": 0.5}
+            }
+            resp = requests.post(ALI_URL, headers=headers, json=payload, timeout=20)
+            res_json = resp.json()
+            answer = res_json.get("output", {}).get("text", "分析失败").strip()
 
-请用简洁、专业、安全的语言给出：
-1. 当前人群状态
-2. 拥挤风险等级
-3. 管理/疏散建议
+            return JsonResponse({"analysis": answer})
+        except Exception as e:
+            return JsonResponse({"analysis": f"AI服务异常: {str(e)}"})
+    return JsonResponse({"analysis": "仅支持POST请求"}, status=400)
 
-不要使用markdown，直接自然语言回答，控制在100字内。
-"""
 
-        # 调用你已有的通义千问
-        headers = {
-            "Authorization": f"Bearer {ALI_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": ALI_MODEL,
-            "input": {
-                "messages": [
-                    {"role": "user", "content": prompt}
-                ]
-            },
-            "parameters": {"temperature": 0.5}
-        }
-        resp = requests.post(ALI_URL, headers=headers, json=payload)
-        res_json = resp.json()
-        answer = res_json["output"]["text"].strip()
+# ====================== 📋 获取历史记录接口 ======================
+@csrf_exempt
+def get_records(request):
+    """获取检测历史记录（支持分页）"""
+    try:
+        from django.core.paginator import Paginator
 
-        return JsonResponse({"analysis": answer})
-    return JsonResponse({"analysis": "AI 服务异常"})
+        page = int(request.GET.get('page', 1))
+        limit = int(request.GET.get('limit', 10))
+
+        records = DetectionRecord.objects.all().order_by('-create_time')
+        paginator = Paginator(records, limit)
+        page_obj = paginator.get_page(page)
+
+        data = []
+        for record in page_obj.object_list:
+            data.append({
+                'id': record.id,
+                'filename': record.filename,
+                'file_path': record.file_path,
+                'total_count': record.total_count,
+                'density_value': record.density_value,
+                'class_data': record.class_data,
+                'is_abnormal': record.is_abnormal,
+                'create_time': record.create_time.strftime('%Y-%m-%d %H:%M:%S')
+            })
+
+        return JsonResponse({
+            'success': True,
+            'total': paginator.count,
+            'page': page_obj.number,
+            'limit': limit,
+            'data': data
+        })
+    except Exception as e:
+        import traceback
+        print(f"❌ 获取记录失败: {e}\n{traceback.format_exc()}")
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)

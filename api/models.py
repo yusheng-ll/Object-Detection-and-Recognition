@@ -1,22 +1,26 @@
+# api/models.py
 from django.db import models
 
-# 这张表：存储每次的检测记录（图片、人数、密度、状态、时间）
-class DetectRecord(models.Model):
-    id = models.BigAutoField(primary_key=True)
-    filename = models.CharField(max_length=255)          # 文件名
-    file_path = models.CharField(max_length=500)         # 图片路径 / 视频路径
-    crowd_count = models.IntegerField()                  # 检测出的人数
-    density_level = models.CharField(max_length=50)       # 密度等级 / 数值
-    is_abnormal = models.BooleanField(default=False)     # 是否拥挤
-    create_time = models.DateTimeField(auto_now_add=True)# 检测时间
-    is_video = models.BooleanField(default=False)        # 标记是否为视频
+
+class DetectionRecord(models.Model):
+    filename = models.CharField(max_length=255, verbose_name='文件名')
+    file_path = models.CharField(max_length=500, verbose_name='结果图路径')
+
+    # 🔑 核心指标
+    total_count = models.IntegerField(default=0, verbose_name='目标总数')
+    density_value = models.FloatField(default=0.0, verbose_name='密度(个/m²)')
+    class_data = models.JSONField(default=dict, blank=True, verbose_name='类别统计明细')
+    is_abnormal = models.BooleanField(default=False, verbose_name='是否密度异常')
+
+    create_time = models.DateTimeField(auto_now_add=True, verbose_name='检测时间')
 
     class Meta:
-        db_table = 'detect_record'
+        db_table = 'detection_records'
+        verbose_name = '检测记录'
         ordering = ['-create_time']
 
     def __str__(self):
-        return f"第{self.crowd_count}人 | {self.create_time}"
+        return f"{self.filename} - {self.total_count}个目标"
 
 # 训练日志表
 #class TrainLog(models.Model):

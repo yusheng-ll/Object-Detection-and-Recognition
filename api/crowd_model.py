@@ -3,6 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class CSRNet(nn.Module):
+    """
+    真实人群密度估计模型 CSRNet
+    可训练、可预测、输出密度图，求和 = 人数
+    """
     def __init__(self):
         super(CSRNet, self).__init__()
         self.frontend = nn.Sequential(

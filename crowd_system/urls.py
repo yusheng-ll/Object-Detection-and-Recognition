@@ -3,6 +3,7 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 
+
 admin.site.site_header = '公共场所人群密度估计与异常聚集检测系统'
 admin.site.site_title = '人群密度系统后台'
 admin.site.index_title = '系统管理后台'

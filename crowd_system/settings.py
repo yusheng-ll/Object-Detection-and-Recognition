@@ -1,6 +1,19 @@
 import os
 from pathlib import Path
 
+# crowd_system/settings.py
+
+# ... 其他配置 ...
+
+# 🔑 1. 登录成功后跳转的页面
+LOGIN_REDIRECT_URL = '/'  # 跳转回首页
+
+# 🔑 2. 未登录时自动跳转到的登录页面 URL
+LOGIN_URL = '/login/'
+
+# 🔑 3. 注销（退出登录）后跳转的页面
+LOGOUT_REDIRECT_URL = '/login/'
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = 'django-crowd-system-2025'
@@ -62,7 +75,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'crowd_system',
         'USER': 'root',
-        'PASSWORD': '***********',
+        'PASSWORD': 'du05067304',
         'HOST': '127.0.0.1',
         'PORT': '3306',
     }
@@ -79,3 +92,5 @@ MEDIA_URL = '/uploads/'
 MODEL_PATH = os.path.join(BASE_DIR, 'best.pt')
 
 STATIC_URL = '/static/'
+MEDIA_URL = '/uploads/'  # ✅ 确保有这个
+MEDIA_ROOT = os.path.join(BASE_DIR, 'uploads')  # ✅ 确保有这个
